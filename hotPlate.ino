@@ -14,7 +14,7 @@ float P = 16.13;
 float I = 1.16;
 float D = 56.23;
   
-#define TEMP_BCOEFFICIENT   4066//3950//4267
+#define TEMP_BCOEFFICIENT   4092//3950//4267
 // resistance at 25 degrees C
 #define THERMISTORNOMINAL   100000      
 // temp. for nominal resistance (almost always 25 C)
@@ -67,7 +67,9 @@ void loop() {
   
   Serial.print(target);
   Serial.print("\t");
-  Serial.println(celcius);
+  Serial.print(celcius);
+  Serial.print("\t");
+  Serial.println(output);
   
   delay(waitTime);
 }
