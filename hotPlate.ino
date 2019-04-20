@@ -1,6 +1,8 @@
 /**
  * Shirt iron Hot plate logic
  */
+#include <PID_v1.h>
+#include <PID_AutoTune_v0.h>
 
 #define RELAY_PIN           9  // digital 9
 #define THERMISTOR_PWR      6  // digital 6
@@ -9,23 +11,30 @@
 #define BAUD                57600
 
 #define TEMP_R1             100000  // 100k thermistor
-// Steinhart-Hart coefficients
-float P = 16.13;
-float I = 1.16;
-float D = 56.23;
-  
-#define TEMP_BCOEFFICIENT   4092//3950//4267
-// resistance at 25 degrees C
+// thermistor coefficient
+#define TEMP_BCOEFFICIENT   4100//4267//4092//3950
+// resistance at nominal temperature
 #define THERMISTORNOMINAL   100000      
 // temp. for nominal resistance (almost always 25 C)
 #define TEMPERATURENOMINAL  25   
 
-float target=21;
+double KP = 0.1;
+double KI = 0.0;
+double KD = 0.01;
+double minimumThreshold=0.725;
 
-float integral = 0;
-float previousError = 0;
+double aTuneStep=50, aTuneNoise=1, aTuneStartValue=100;
+unsigned int aTuneLookBack=20;
+byte ATuneModeRemember=2;
 
-int   waitTime = 100;
+double target=40;
+double input, output;
+boolean tuning=false;
+
+PID myPID(&input, &output, &target, KP,KI,KD, DIRECT);
+PID_ATune aTune(&input, &output);
+
+int waitTime = 50;
 
 
 void setup() {
@@ -37,39 +46,73 @@ void setup() {
 
   // prepare to send to the relay
   pinMode(RELAY_PIN,OUTPUT);
+  
+  myPID.SetMode(AUTOMATIC);
+  if(tuning) {
+    tuning=false;
+    changeAutoTune();
+    tuning=true;
+  }
 }
 
 
 void loop() {
   if(Serial.available() > 0) {
-    float newTarget = Serial.parseFloat();
-    if( !isnan(newTarget) && newTarget>0 ) {
-      target=newTarget;
-      integral=0;
+    char c = Serial.read();
+    switch(c) {
+      case 'p': case 'P': KP=Serial.parseFloat(); break;
+      case 'i': case 'I': KI=Serial.parseFloat(); break;
+      case 'd': case 'D': KD=Serial.parseFloat(); break;
+      case 't': case 'T': {
+          double newTarget = Serial.parseFloat();
+          if( !isnan(newTarget) && newTarget>0 && newTarget<255 ) {
+            target=newTarget;
+          }
+        }
+        break;
+      case 'm': case 'M': {
+          double newTarget = Serial.parseFloat();
+          if( !isnan(newTarget) && newTarget>0 && newTarget<255 ) {
+            minimumThreshold=newTarget;
+          }
+        }
+        break;
+      default: {
+          while(Serial.available()>0) Serial.read();  
+        }
+        break;
     }
   }
   
   float sensorReading = analogRead(THERMISTOR_SENSOR);
-  float celcius = SteinhartHartEquation(sensorReading);
+  input = SteinhartHartEquation(sensorReading);
 
-  float iterationTime = waitTime/1000.0;
+  if(tuning==true) {
+    byte val = aTune.Runtime();
+    if(val!=0) {
+      Serial.println("\n\nAUTOTUNE FINISHED\n");
+      tuning=false;
+      // set the tuning parameters
+      KP = aTune.GetKp();
+      KI = aTune.GetKi();
+      KD = aTune.GetKd();
+      myPID.SetTunings(KP,KI,KD);
+      AutoTuneHelper(false);
+    }
+  } else {
+    myPID.Compute();
+  }
   
-  float error = target - celcius;
-  integral += error * iterationTime; 
-  float derivative = (error - previousError)/iterationTime;
-  previousError = error;
-
-  // @see https://reprap.org/wiki/PID_Tuning
-  //Prusa 3 response to M301 says p:16.13 i:1.16 d:56.23 c:1.00
-  float output = P*error + I*integral + D*derivative;
+  digitalWrite(RELAY_PIN,output>minimumThreshold ? HIGH: LOW);
   
-  digitalWrite(RELAY_PIN,output>0 ? HIGH: LOW);
-  
-  Serial.print(target);
-  Serial.print("\t");
-  Serial.print(celcius);
-  Serial.print("\t");
-  Serial.println(output);
+  Serial.print(target);            Serial.print("\t");
+  Serial.print(input);             Serial.print("\t");
+  Serial.print(output);            Serial.print("\t");
+  Serial.print(KP);                Serial.print("\t");
+  Serial.print(KI);                Serial.print("\t");
+  Serial.print(KD);                Serial.print("\t");
+  Serial.print(minimumThreshold);  Serial.print("\t");
+  Serial.print(tuning?'*':' ');    Serial.println();
   
   delay(waitTime);
 }
@@ -85,4 +128,33 @@ float SteinhartHartEquation(float arg0) {
   steinhart += 1.0 / (TEMPERATURENOMINAL + 273.15); // + (1/To)
   steinhart = 1.0 / steinhart;                 // Invert
   return steinhart - 273.15;                   // convert to C
+}
+
+
+void changeAutoTune()
+{
+ if(!tuning)
+  {
+    //Set the output to the desired starting frequency.
+    output=aTuneStartValue;
+    aTune.SetNoiseBand(aTuneNoise);
+    aTune.SetOutputStep(aTuneStep);
+    aTune.SetLookbackSec((int)aTuneLookBack);
+    AutoTuneHelper(true);
+    tuning = true;
+  }
+  else
+  { //cancel autotune
+    aTune.Cancel();
+    tuning = false;
+    AutoTuneHelper(false);
+  }
+}
+
+void AutoTuneHelper(boolean start)
+{
+  if(start)
+    ATuneModeRemember = myPID.GetMode();
+  else
+    myPID.SetMode(ATuneModeRemember);
 }
