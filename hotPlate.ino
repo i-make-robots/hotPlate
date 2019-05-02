@@ -4,6 +4,9 @@
 #include <PID_v1.h>
 #include <PID_AutoTune_v0.h>
 
+// uncomment this line if you're using the serial window and you need to see PID tuning values
+#define DISPLAY_FOR_GRAPH  
+
 #define RELAY_PIN           9  // digital 9
 #define THERMISTOR_PWR      6  // digital 6
 #define THERMISTOR_SENSOR   0  // analog 0
@@ -12,22 +15,21 @@
 
 #define TEMP_R1             100000  // 100k thermistor
 // thermistor coefficient
-#define TEMP_BCOEFFICIENT   4100//4267//4092//3950
+#define TEMP_BCOEFFICIENT   4267
 // resistance at nominal temperature
 #define THERMISTORNOMINAL   100000      
 // temp. for nominal resistance (almost always 25 C)
 #define TEMPERATURENOMINAL  25   
 
-double KP = 0.1;
-double KI = 0.0;
-double KD = 0.01;
-double minimumThreshold=0.725;
+double KP = 18.0;
+double KI = 0.01;
+double KD = 20.0;
 
 double aTuneStep=50, aTuneNoise=1, aTuneStartValue=100;
 unsigned int aTuneLookBack=20;
 byte ATuneModeRemember=2;
 
-double target=40;
+double target=21;
 double input, output;
 boolean tuning=false;
 
@@ -48,6 +50,7 @@ void setup() {
   pinMode(RELAY_PIN,OUTPUT);
   
   myPID.SetMode(AUTOMATIC);
+  myPID.SetSampleTime(waitTime);
   if(tuning) {
     tuning=false;
     changeAutoTune();
@@ -60,9 +63,9 @@ void loop() {
   if(Serial.available() > 0) {
     char c = Serial.read();
     switch(c) {
-      case 'p': case 'P': KP=Serial.parseFloat(); break;
-      case 'i': case 'I': KI=Serial.parseFloat(); break;
-      case 'd': case 'D': KD=Serial.parseFloat(); break;
+      case 'p': case 'P': KP=Serial.parseFloat();  myPID.SetTunings(KP,KI,KD);  break;
+      case 'i': case 'I': KI=Serial.parseFloat();  myPID.SetTunings(KP,KI,KD);  break;
+      case 'd': case 'D': KD=Serial.parseFloat();  myPID.SetTunings(KP,KI,KD);  break;
       case 't': case 'T': {
           double newTarget = Serial.parseFloat();
           if( !isnan(newTarget) && newTarget>0 && newTarget<255 ) {
@@ -70,22 +73,13 @@ void loop() {
           }
         }
         break;
-      case 'm': case 'M': {
-          double newTarget = Serial.parseFloat();
-          if( !isnan(newTarget) && newTarget>0 && newTarget<255 ) {
-            minimumThreshold=newTarget;
-          }
-        }
-        break;
-      default: {
-          while(Serial.available()>0) Serial.read();  
-        }
+      default:
         break;
     }
   }
-  
+
   float sensorReading = analogRead(THERMISTOR_SENSOR);
-  input = SteinhartHartEquation(sensorReading);
+  input = convertResistanceToCelcius(sensorReading);
 
   if(tuning==true) {
     byte val = aTune.Runtime();
@@ -103,31 +97,30 @@ void loop() {
     myPID.Compute();
   }
   
-  digitalWrite(RELAY_PIN,output>minimumThreshold ? HIGH: LOW);
-  
+  analogWrite(RELAY_PIN,output);
   Serial.print(target);            Serial.print("\t");
   Serial.print(input);             Serial.print("\t");
+#ifndef DISPLAY_FOR_GRAPH
   Serial.print(output);            Serial.print("\t");
   Serial.print(KP);                Serial.print("\t");
   Serial.print(KI);                Serial.print("\t");
   Serial.print(KD);                Serial.print("\t");
-  Serial.print(minimumThreshold);  Serial.print("\t");
-  Serial.print(tuning?'*':' ');    Serial.println();
+  Serial.print(tuning?'*':' ');    
+#endif
+  Serial.println();
   
   delay(waitTime);
 }
 
 
-float SteinhartHartEquation(float arg0) {
+float convertResistanceToCelcius(float arg0) {
   float a2 = TEMP_R1 * (1023.0 / arg0 - 1.0);
   
-  float steinhart;
-  steinhart = a2 / THERMISTORNOMINAL;     // (R/Ro)
-  steinhart = log(steinhart);                  // ln(R/Ro)
-  steinhart /= TEMP_BCOEFFICIENT;              // 1/B * ln(R/Ro)
+  float steinhart = a2 / THERMISTORNOMINAL;         // (R/Ro)
+  steinhart = log(steinhart) / TEMP_BCOEFFICIENT;   // ln(R/Ro) / B
   steinhart += 1.0 / (TEMPERATURENOMINAL + 273.15); // + (1/To)
-  steinhart = 1.0 / steinhart;                 // Invert
-  return steinhart - 273.15;                   // convert to C
+  steinhart = 1.0 / steinhart;                      // Invert
+  return steinhart - 273.15;                        // convert to C
 }
 
 
